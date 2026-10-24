@@ -274,6 +274,7 @@ ul.shots {
         <div class="ov-bar">
           <label class="chk-row"><input type="checkbox" id="tgCourt" checked> 球場格線與公尺比例尺</label>
           <label class="chk-row"><input type="checkbox" id="tgBalls" checked> 球軌跡與球速</label>
+          <label class="chk-row"><input type="checkbox" id="tgDots"> 顯示偵測點</label>
         </div>
       </div>
       <p class="msg" id="msg" role="status" hidden></p>
@@ -391,9 +392,9 @@ ul.shots {
       <div class="ctl">
         <label for="trSens" style="font-weight:500;font-size:14px">球偵測靈敏度</label>
         <select class="sel" id="trSens">
-          <option value="40">高（容易多抓雜訊）</option>
-          <option value="55" selected>中（建議）</option>
-          <option value="75">低（只抓明顯的球）</option>
+          <option value="30">高（球很小或畫面偏暗時用）</option>
+          <option value="42" selected>中（建議）</option>
+          <option value="60">低（只抓很明顯的球）</option>
         </select>
       </div>
       <div class="ctl">
@@ -414,6 +415,7 @@ ul.shots {
       </div>
       <video class="ex-video" id="trVid" playsinline muted hidden></video>
       <p class="cal-info" id="trInfo"></p>
+      <p class="cal-info" id="trDiag"></p>
     </section>
 
     <section aria-label="輸出">
@@ -1143,6 +1145,7 @@ $('csvBtn').addEventListener('click', async function () {
 var GEO = window.TCGeometry, TRK = window.TCTracker;
 S.cal = null; S.corners = []; S.calMode = false; S.drag = -1; S.courtType = 'doubles';
 S.tracks = []; S.segments = []; S.segByTrack = {}; S.tracking = false; S.ovDirty = true; S.ovT = -1;
+S.frames = []; S.trScale = 1; S.trW = 0; S.trLevel = null;
 var ov = $('ov');
 var CORNER_NAMES = ['近端左角', '近端右角', '遠端右角', '遠端左角'];
 var BALL = '#D8E34A', INK = '#10202B';
@@ -1164,6 +1167,7 @@ vid.addEventListener('seeked', function () { S.ovDirty = true; });
 vid.addEventListener('timeupdate', function () { S.ovDirty = true; });
 $('tgCourt').addEventListener('change', function () { S.ovDirty = true; });
 $('tgBalls').addEventListener('change', function () { S.ovDirty = true; });
+$('tgDots').addEventListener('change', function () { S.ovDirty = true; });
 
 /* 標定的儲存（只存在這台裝置的瀏覽器） */
 function calKey() { return S.file ? 'tc-cal:' + S.file.name + ':' + S.file.size : null; }
@@ -1249,7 +1253,7 @@ function drawOv() {
   g.clearRect(0, 0, ov.width / dpr, ov.height / dpr);
   var vr = vRect(); if (!vr) return;
   var map = { xy: function (u, v) { return [vr.x + u * vr.s, vr.y + v * vr.s]; }, k: Math.max(0.75, vr.w / 960), s: vr.s };
-  drawOverlayOn(g, vid.currentTime || 0, map, { court: $('tgCourt').checked, balls: $('tgBalls').checked });
+  drawOverlayOn(g, vid.currentTime || 0, map, { court: $('tgCourt').checked, balls: $('tgBalls').checked, dots: $('tgDots').checked });
   if (S.calMode) drawCalMode(g, map);
 }
 function fontOf(k, bold) { return (bold ? '700 ' : '500 ') + Math.round(13 * k) + 'px "Barlow Condensed","Noto Sans TC",system-ui,sans-serif'; }
@@ -1260,6 +1264,7 @@ function label(g, txt, x, y, k, color, bold) {
 function drawOverlayOn(g, t, map, o) {
   var k = map.k;
   if (S.cal && o.court) drawCourt(g, S.cal, map, k);
+  if (o.dots) drawDots(g, t, map, k);
   if (o.balls) drawBalls(g, t, map, k);
 }
 function drawCourt(g, cal, map, k) {
@@ -1309,6 +1314,21 @@ function segAt(trackId, t) {
 function bouncesOf(tr) {
   if (!tr._bn) { var ix = GEO.findBounces(tr.pts, vid.videoHeight || 1080); tr._bn = ix; }
   return tr._bn;
+}
+/* 原始偵測點：讓使用者直接確認工具到底有沒有「看到」球 */
+function drawDots(g, t, map, k) {
+  if (!S.frames.length) return;
+  var lo = 0, hi = S.frames.length - 1, mid;
+  while (lo < hi) { mid = (lo + hi) >> 1; if (S.frames[mid].t < t - 0.02) lo = mid + 1; else hi = mid; }
+  var fr = S.frames[lo];
+  if (!fr || Math.abs(fr.t - t) > 0.25) return;
+  var sc = S.trScale, lim = trackOpt().scoreMin, isoMax = trackOpt().isoMax;
+  g.lineWidth = 1.4 * k;
+  fr.c.forEach(function (c) {
+    var q = map.xy(c.x * sc, c.y * sc), pass = c.s >= lim && c.iso <= isoMax;
+    g.beginPath(); g.arc(q[0], q[1], (pass ? 7 : 4.5) * k, 0, 6.2832);
+    g.strokeStyle = pass ? '#4ED8A0' : 'rgba(255,255,255,.45)'; g.stroke();
+  });
 }
 function drawBalls(g, t, map, k) {
   var tracks = S.tracks, a, i, HOLD = 1.0, MAXTRAIL = 3;
@@ -1418,6 +1438,31 @@ function setTrackUi(on) {
   if (!on) $('calReset').disabled = !S.corners.length;
   updateExportState();
 }
+function trackOpt() {
+  var sens = +$('trSens').value;
+  return { scoreMin: sens, isoMax: sens <= 30 ? 100 : (sens <= 42 ? 60 : 35), smoothTol: Math.max(2.6, 0.0035 * (S.trW || 960)) };
+}
+/* 用已經存下來的候選點重新算軌跡：改靈敏度不必重新解碼影片 */
+function rebuildTracks() {
+  if (!S.frames.length) { S.tracks = []; S.trLevel = null; recomputeShots(); return; }
+  var sc = S.trScale, r = TRK.pathsFrom(S.frames, trackOpt());
+  S.trLevel = r;
+  S.tracks = r.paths.map(function (tr, idx) {
+    return { id: idx + 1, pts: tr.pts.map(function (p) { return { t: p.t, u: p.x * sc, v: p.y * sc }; }) };
+  });
+  recomputeShots();
+  var avg = S.frames.reduce(function (a, f) { return a + f.c.length; }, 0) / S.frames.length;
+  var okN = S.segments.filter(function (x) { return x.ok; }).length;
+  $('trInfo').textContent = S.tracks.length
+    ? ('找到 ' + S.tracks.length + ' 條球軌跡' + (S.cal ? '，其中 ' + okN + ' 段可估算球速。' : '。完成球場標定後就能換算球速。'))
+    : '沒有找到球的軌跡。把「球偵測靈敏度」調高，或勾選「顯示偵測點」看看工具有沒有看到球。';
+  $('trDiag').textContent = '已解析 ' + S.frames.length + ' 格，每格平均 ' + avg.toFixed(1) + ' 個候選點'
+    + (r.levelName ? '，用「' + r.levelName + '」條件連成軌跡。' : '，但沒有連成穩定軌跡。')
+    + ' 調整靈敏度會立刻重算，不需要重新解析。';
+  S.ovDirty = true;
+}
+$('trSens').addEventListener('change', function () { if (S.frames.length && !S.busy) rebuildTracks(); });
+
 async function trackBalls() {
   if (!S.file || !S.dur || S.busy || S.exporting) return;
   var tv = $('trVid');
@@ -1430,10 +1475,9 @@ async function trackBalls() {
     var vw = tv.videoWidth, vh = tv.videoHeight, pw = Math.min(1280, vw), ph = Math.max(2, Math.round(vh * pw / vw)), sc = vw / pw;
     var cv = document.createElement('canvas'); cv.width = pw; cv.height = ph;
     var cg = cv.getContext('2d', { willReadFrequently: true });
-    var frames = [TRK.makeFrame(pw, ph), TRK.makeFrame(pw, ph), TRK.makeFrame(pw, ph)], buf = TRK.newBuf(pw, ph);
-    var tracker = new TRK.Tracker();
+    var fbuf = [TRK.makeFrame(pw, ph), TRK.makeFrame(pw, ph), TRK.makeFrame(pw, ph)], buf = TRK.newBuf(pw, ph);
     var detOpt = {}; for (var kk in TRK.DEFAULT_DETECT) detOpt[kk] = TRK.DEFAULT_DETECT[kk];
-    detOpt.thr = +$('trSens').value;
+    S.frames = []; S.trScale = sc; S.trW = pw; S.tracks = []; S.segments = []; S.segByTrack = {};
     var roi = null;
     if (S.cal) {
       var poly = GEO.roiPolygon(S.cal, 4);
@@ -1445,20 +1489,21 @@ async function trackBalls() {
     var ring = [], slot = 0, lastShown = -1, curStart = 0;
     function onFrame(t) {
       cg.drawImage(tv, 0, 0, pw, ph);
-      var img = cg.getImageData(0, 0, pw, ph).data, fr = frames[slot % 3];
+      var img = cg.getImageData(0, 0, pw, ph).data, fr = fbuf[slot % 3];
       slot++;
       TRK.features(img, pw, ph, fr);
       ring.push({ t: t, f: fr });
       if (ring.length === 3) {
         var c = TRK.detect(ring[0].f, ring[1].f, ring[2].f, pw, ph, detOpt, roi, buf);
-        tracker.update(ring[1].t, c); ring.shift();
+        if (c.length > 10) c.length = 10;
+        S.frames.push({ t: ring[1].t, c: c }); ring.shift();
       }
       var shown = Math.floor((doneT + t - curStart) * 2);
       if (shown !== lastShown) {
         lastShown = shown;
         var d = Math.max(0, Math.min(total, doneT + t - curStart));
         $('trProg').hidden = false; $('trFill').style.width = Math.round(d / total * 100) + '%';
-        $('trText').textContent = '追蹤中：' + fmt(d) + ' / ' + fmt(total) + '，目前找到 ' + (tracker.done.length) + ' 條軌跡';
+        $('trText').textContent = '解析中：' + fmt(d) + ' / ' + fmt(total) + '，已取得 ' + S.frames.length + ' 格';
       }
     }
     for (var ri = 0; ri < ranges.length; ri++) {
@@ -1482,18 +1527,12 @@ async function trackBalls() {
         var pr = tv.play(); if (pr && pr.catch) pr.catch(function () { fin(); });
       });
       tv.pause();
-      tracker.flush();
       doneT += b - a;
     }
-    var res = tracker.paths();
-    S.tracks = res.map(function (tr, idx) {
-      return { id: idx + 1, pts: tr.pts.map(function (p) { return { t: p.t, u: p.x * sc, v: p.y * sc }; }) };
-    });
-    recomputeShots();
-    var okN = S.segments.filter(function (s) { return s.ok; }).length;
-    $('trText').textContent = S.cancel ? '已取消，保留目前找到的軌跡。' : '追蹤完成。';
-    $('trInfo').textContent = '找到 ' + S.tracks.length + ' 條球軌跡' + (S.cal ? '，其中 ' + okN + ' 段可估算球速。' : '。完成球場標定後就能換算球速。');
-    if (!S.tracks.length) showMsg('沒有找到球的軌跡。可以把「球偵測靈敏度」調高，或確認影片裡看得到黃綠色的網球。', 'err');
+    S.frames.sort(function (a, b) { return a.t - b.t; });
+    rebuildTracks();
+    $('trText').textContent = S.cancel ? '已取消，使用已解析的部分。' : '解析完成。';
+    if (!S.tracks.length) showMsg('沒有找到球的軌跡。勾選預覽下方的「顯示偵測點」，就能看到工具在每一格找到什麼；綠圈是通過門檻的候選點。', 'err');
   } catch (e) {
     showMsg('追蹤失敗：' + (e.message || e), 'err');
   } finally {
@@ -1509,7 +1548,8 @@ $('trCancel').addEventListener('click', function () { S.cancel = true; });
 vid.addEventListener('loadedmetadata', function () {
   S.tracks = []; S.segments = []; S.segByTrack = {};
   $('calStart').disabled = false; $('trStart').disabled = false;
-  $('trInfo').textContent = ''; $('trProg').hidden = true;
+  $('trInfo').textContent = ''; $('trDiag').textContent = ''; $('trProg').hidden = true;
+  S.frames = []; S.trLevel = null;
   loadCal();
 });
 
