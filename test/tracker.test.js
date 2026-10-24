@@ -55,11 +55,27 @@ res.forEach(r => {
   const mk = (id, t0, n, x0, y0, vx, vy) => ({ id, pts: Array.from({ length: n }, (_, i) => ({ t: t0 + i / 30, x: x0 + vx * i / 30, y: y0 + vy * i / 30, a: 8 })) });
   const A = mk(1, 0, 20, 100, 300, 600, -200);          // 去程
   const B = mk(2, 0.8, 20, 100 + 600 * 0.667 + 40, 300 - 200 * 0.667 + 40, 500, 300); // 彈跳/漏掉幾格後
-  const C = mk(3, 1.6, 20, 800, 200, -700, 100);         // 擊球反向
+  const C = mk(3, 1.6, 20, 880, 400, -700, 100);         // 擊球反向
   const D = mk(4, 0.2, 20, 50, 1500, 30, 0);              // 另一顆（沒移動太多的不算）
   const E = mk(5, 0.3, 25, 2400, 900, 20, 100);            // 遠處另一顆球
   const paths = T.stitch([A, B, C, D, E]);
   const big = paths.filter(p => p.parts >= 3);
   console.log('串接路徑數', paths.length, '最長路徑片段數', Math.max(...paths.map(p => p.parts)));
   if (!big.length) { console.error('串接失敗'); process.exit(1); }
+})();
+
+/* 抖動軌跡（像球員肢體）應被擋掉，平滑的球軌跡應保留 */
+(function () {
+  const tr = new T.Tracker();
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5;
+  for (let f = 0; f < 60; f++) {
+    const t = f / 30;
+    const cands = [{ x: 200 + 500 * t, y: 600 - 400 * t * (1 - t) * 4, area: 8, score: 100, yel: 100 },          // 球
+                   { x: 900 + 40 * rnd() * 2, y: 300 + 40 * rnd() * 2, area: 10, score: 90, yel: 90 }];        // 抖動雜訊
+    tr.update(t, cands);
+  }
+  tr.flush();
+  const r = tr.results();
+  console.log('抖動測試：保留軌跡數', r.length, '（預期 1，且位於球的軌道上）');
+  if (r.length !== 1 || r[0].pts[0].x > 400) { console.error('抖動軌跡未被擋掉'); process.exit(1); }
 })();
