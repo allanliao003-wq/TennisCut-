@@ -49,3 +49,17 @@ res.forEach(r => {
   r.pts.forEach(p => { let best = 1e9; truth.forEach(b => { const q = b.pos(p.t); if (q) best = Math.min(best, Math.hypot(q[0] - p.x, q[1] - p.y)); }); maxErr = Math.max(maxErr, best); });
   console.log(' 軌跡', r.id, '點數', r.pts.length, '時間', r.pts[0].t.toFixed(2), '→', r.pts[r.pts.length-1].t.toFixed(2), '最大位置誤差(px)', maxErr.toFixed(2));
 });
+
+/* 串接測試：擊球反向 + 漏偵測的三段片段應接成一條路徑，另一顆遠處的球不應被接上 */
+(function () {
+  const mk = (id, t0, n, x0, y0, vx, vy) => ({ id, pts: Array.from({ length: n }, (_, i) => ({ t: t0 + i / 30, x: x0 + vx * i / 30, y: y0 + vy * i / 30, a: 8 })) });
+  const A = mk(1, 0, 20, 100, 300, 600, -200);          // 去程
+  const B = mk(2, 0.8, 20, 100 + 600 * 0.667 + 40, 300 - 200 * 0.667 + 40, 500, 300); // 彈跳/漏掉幾格後
+  const C = mk(3, 1.6, 20, 800, 200, -700, 100);         // 擊球反向
+  const D = mk(4, 0.2, 20, 50, 1500, 30, 0);              // 另一顆（沒移動太多的不算）
+  const E = mk(5, 0.3, 25, 2400, 900, 20, 100);            // 遠處另一顆球
+  const paths = T.stitch([A, B, C, D, E]);
+  const big = paths.filter(p => p.parts >= 3);
+  console.log('串接路徑數', paths.length, '最長路徑片段數', Math.max(...paths.map(p => p.parts)));
+  if (!big.length) { console.error('串接失敗'); process.exit(1); }
+})();

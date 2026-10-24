@@ -391,16 +391,16 @@ ul.shots {
       <div class="ctl">
         <label for="trSens" style="font-weight:500;font-size:14px">球偵測靈敏度</label>
         <select class="sel" id="trSens">
-          <option value="40">高（容易多抓雜訊）</option>
-          <option value="55" selected>中</option>
+          <option value="40" selected>高（建議，漏球較少）</option>
+          <option value="55">中</option>
           <option value="75">低（只抓明顯的球）</option>
         </select>
       </div>
       <div class="ctl">
         <label for="trRate" style="font-weight:500;font-size:14px">解析速度</label>
         <select class="sel" id="trRate">
-          <option value="1" selected>1 倍（建議）</option>
-          <option value="0.5">0.5 倍（電腦較慢時用）</option>
+          <option value="1">1 倍（電腦夠快時用）</option>
+          <option value="0.5" selected>0.5 倍（建議，不漏格）</option>
           <option value="2">2 倍（可能漏格）</option>
         </select>
       </div>
@@ -1303,35 +1303,48 @@ function drawCourt(g, cal, map, k) {
 }
 function segAt(trackId, t) {
   var arr = S.segByTrack[trackId] || [];
-  for (var i = 0; i < arr.length; i++) if (arr[i].ok && t >= arr[i].t0 - 0.02 && t <= arr[i].t1 + 0.35) return arr[i];
+  for (var i = 0; i < arr.length; i++) if (arr[i].ok && t >= arr[i].t0 - 0.03 && t <= arr[i].t1 + 0.25) return arr[i];
   return null;
 }
+function bouncesOf(tr) {
+  if (!tr._bn) { var ix = GEO.findBounces(tr.pts, vid.videoHeight || 1080); tr._bn = ix; }
+  return tr._bn;
+}
 function drawBalls(g, t, map, k) {
-  var tracks = S.tracks, a, i;
+  var tracks = S.tracks, a, i, HOLD = 2.0, MAXTRAIL = 12;
   g.lineCap = 'round'; g.lineJoin = 'round';
   for (a = 0; a < tracks.length; a++) {
     var tr = tracks[a], pts = tr.pts, n = pts.length;
-    if (t < pts[0].t - 0.04 || t > pts[n - 1].t + 0.6) continue;
+    if (t < pts[0].t - 0.04 || t > pts[n - 1].t + HOLD) continue;
     var i1 = -1;
     for (i = n - 1; i >= 0; i--) if (pts[i].t <= t) { i1 = i; break; }
-    if (i1 < 0) continue;
-    var i0 = i1; while (i0 > 0 && pts[i0 - 1].t >= t - 0.8) i0--;
-    for (i = i0 + 1; i <= i1; i++) {
-      var age = (t - pts[i].t) / 0.8, p = map.xy(pts[i - 1].u, pts[i - 1].v), q = map.xy(pts[i].u, pts[i].v);
-      g.strokeStyle = 'rgba(0,0,0,' + (0.35 * (1 - age)).toFixed(2) + ')'; g.lineWidth = (3 + 4 * (1 - age)) * k;
-      g.beginPath(); g.moveTo(p[0], p[1]); g.lineTo(q[0], q[1]); g.stroke();
-      g.strokeStyle = 'rgba(216,227,74,' + (0.98 - 0.8 * age).toFixed(2) + ')'; g.lineWidth = (1.4 + 2.6 * (1 - age)) * k;
-      g.beginPath(); g.moveTo(p[0], p[1]); g.lineTo(q[0], q[1]); g.stroke();
+    if (i1 < 1) continue;
+    var i0 = i1; while (i0 > 0 && pts[i0 - 1].t >= t - MAXTRAIL) i0--;
+    // 整段回合的來回軌跡：一條連續實心線（先畫深色外框再畫亮色線，避免半透明重疊出現斷點）
+    var P = [];
+    for (i = i0; i <= i1; i++) P.push(map.xy(pts[i].u, pts[i].v));
+    function trace() {
+      g.beginPath(); g.moveTo(P[0][0], P[0][1]);
+      for (var q = 1; q < P.length - 1; q++) { var mx = (P[q][0] + P[q + 1][0]) / 2, my = (P[q][1] + P[q + 1][1]) / 2; g.quadraticCurveTo(P[q][0], P[q][1], mx, my); }
+      g.lineTo(P[P.length - 1][0], P[P.length - 1][1]);
     }
+    g.setLineDash([]);
+    trace(); g.strokeStyle = 'rgba(10,25,35,.85)'; g.lineWidth = 5 * k; g.stroke();
+    trace(); g.strokeStyle = BALL; g.lineWidth = 2.6 * k; g.stroke();
+    // 彈跳點
+    bouncesOf(tr).forEach(function (bi) {
+      if (bi < i0 || bi > i1) return;
+      var c = map.xy(pts[bi].u, pts[bi].v);
+      g.beginPath(); g.arc(c[0], c[1], 6 * k, 0, 6.2832); g.lineWidth = 2 * k; g.strokeStyle = '#fff'; g.stroke();
+    });
     var last = pts[i1], lp = map.xy(last.u, last.v);
-    if (t - last.t < 0.15) {
+    if (i1 < n - 1 || t - last.t < 0.2) {
       g.beginPath(); g.arc(lp[0], lp[1], 5.5 * k, 0, 6.2832); g.fillStyle = BALL; g.fill();
-      g.lineWidth = 1.6 * k; g.strokeStyle = INK; g.stroke();
+      g.lineWidth = 1.8 * k; g.strokeStyle = INK; g.stroke();
     }
     var seg = segAt(tr.id, t);
     if (seg) {
-      var v = GEO.speedAt(seg.fit, Math.min(seg.t1, Math.max(seg.t0, t))) * 3.6;
-      var txt = '約 ' + Math.round(v) + ' km/h';
+      var txt = '約 ' + Math.round(seg.kmh) + ' km/h';
       g.font = fontOf(k * 1.25, true); g.textAlign = 'left'; g.textBaseline = 'alphabetic';
       var tw = g.measureText(txt).width, tx = lp[0] + 12 * k, ty = lp[1] - 12 * k;
       g.fillStyle = 'rgba(10,25,35,.82)'; g.fillRect(tx - 5 * k, ty - 17 * k, tw + 10 * k, 23 * k);
@@ -1414,7 +1427,7 @@ async function trackBalls() {
   try {
     tv.hidden = false; tv.muted = true; tv.src = S.url;
     await waitMeta(tv);
-    var vw = tv.videoWidth, vh = tv.videoHeight, pw = Math.min(960, vw), ph = Math.max(2, Math.round(vh * pw / vw)), sc = vw / pw;
+    var vw = tv.videoWidth, vh = tv.videoHeight, pw = Math.min(1280, vw), ph = Math.max(2, Math.round(vh * pw / vw)), sc = vw / pw;
     var cv = document.createElement('canvas'); cv.width = pw; cv.height = ph;
     var cg = cv.getContext('2d', { willReadFrequently: true });
     var frames = [TRK.makeFrame(pw, ph), TRK.makeFrame(pw, ph), TRK.makeFrame(pw, ph)], buf = TRK.newBuf(pw, ph);
@@ -1472,7 +1485,7 @@ async function trackBalls() {
       tracker.flush();
       doneT += b - a;
     }
-    var res = tracker.results();
+    var res = tracker.paths();
     S.tracks = res.map(function (tr, idx) {
       return { id: idx + 1, pts: tr.pts.map(function (p) { return { t: p.t, u: p.x * sc, v: p.y * sc }; }) };
     });
