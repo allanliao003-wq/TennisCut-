@@ -414,6 +414,7 @@ ul.shots {
         <p class="prog-text" id="trText"></p>
       </div>
       <video class="ex-video" id="trVid" playsinline muted hidden></video>
+      <label class="chk-row" style="margin:6px 0"><input type="checkbox" id="tgPhys" checked> 只顯示符合拋物線的軌跡（需先標定）</label>
       <p class="cal-info" id="trInfo"></p>
       <p class="cal-info" id="trDiag"></p>
     </section>
@@ -1145,7 +1146,7 @@ $('csvBtn').addEventListener('click', async function () {
 var GEO = window.TCGeometry, TRK = window.TCTracker;
 S.cal = null; S.corners = []; S.calMode = false; S.drag = -1; S.courtType = 'doubles';
 S.tracks = []; S.segments = []; S.segByTrack = {}; S.tracking = false; S.ovDirty = true; S.ovT = -1;
-S.frames = []; S.trScale = 1; S.trW = 0; S.trLevel = null;
+S.frames = []; S.trScale = 1; S.trW = 0; S.trLevel = null; S.allTracks = []; S.hoverPt = null;
 var ov = $('ov');
 var CORNER_NAMES = ['近端左角', '近端右角', '遠端右角', '遠端左角'];
 var BALL = '#D8E34A', INK = '#10202B';
@@ -1185,10 +1186,12 @@ function loadCal() {
   } catch (e) {}
   recalc(false);
 }
-function recalc(save) {
+function recalc(save, light) {
   S.cal = null;
   if (S.corners.length === 4 && vid.videoWidth) S.cal = GEO.calibrate(S.corners, S.courtType, vid.videoWidth, vid.videoHeight);
-  updateCalInfo(); recomputeShots(); S.ovDirty = true;
+  updateCalInfo();
+  if (!light) { if (S.allTracks && S.allTracks.length) applyTrackFilter(); else recomputeShots(); }
+  S.ovDirty = true;
   if (save) saveCal();
 }
 function updateCalInfo() {
@@ -1240,11 +1243,14 @@ ov.addEventListener('pointerdown', function (e) {
   S.ovDirty = true;
 });
 ov.addEventListener('pointermove', function (e) {
-  if (!S.calMode || S.drag < 0) return;
+  if (!S.calMode) return;
   var p = evToVideo(e); if (!p) return;
-  S.corners[S.drag] = [p.u, p.v]; recalc(false);
+  S.hoverPt = [p.u, p.v];
+  if (S.drag >= 0) { S.corners[S.drag] = [p.u, p.v]; recalc(false, true); }
+  else S.ovDirty = true;
 });
-function endDrag() { if (S.drag >= 0) { S.drag = -1; saveCal(); } }
+ov.addEventListener('pointerleave', function () { if (S.hoverPt) { S.hoverPt = null; S.ovDirty = true; } });
+function endDrag() { if (S.drag >= 0) { S.drag = -1; recalc(true); } }
 ov.addEventListener('pointerup', endDrag);
 ov.addEventListener('pointercancel', endDrag);
 
@@ -1277,11 +1283,14 @@ function drawCourt(g, cal, map, k) {
   g.lineCap = 'round'; g.textBaseline = 'middle'; g.textAlign = 'center';
   g.strokeStyle = 'rgba(255,255,255,.9)'; g.lineWidth = 1.8 * k;
   L.lines.forEach(function (s) { line(s[0], s[1]); });
-  // 球網
+  // 球網：貼地的那條線由單應矩陣算，一定準；網子頂端(1.07m)要靠焦距，焦距不可信就不畫
   g.strokeStyle = BALL; g.lineWidth = 2 * k;
-  line(L.net[0], L.net[1]);
-  g.lineWidth = 1.2 * k; g.strokeStyle = 'rgba(216,227,74,.7)';
-  line(L.net[0], L.netBase[0]); line(L.net[1], L.netBase[1]);
+  line(L.netBase[0], L.netBase[1]);
+  if (cal.conf === 'good' || cal.conf === 'height') {
+    g.lineWidth = 1.6 * k; line(L.net[0], L.net[1]);
+    g.lineWidth = 1.2 * k; g.strokeStyle = 'rgba(216,227,74,.7)';
+    line(L.net[0], L.netBase[0]); line(L.net[1], L.netBase[1]);
+  }
   // 公尺刻度：左側邊線每 1 公尺一格，近端底線每 1 公尺一格
   g.strokeStyle = BALL; g.lineWidth = 2 * k;
   var m;
@@ -1375,6 +1384,44 @@ function drawBalls(g, t, map, k) {
     }
   }
 }
+/* 放大鏡：標定時把游標附近放大，角點才點得準（差 0.2 公尺，遠端就會差很多） */
+function drawLoupe(g, map, k) {
+  var p = S.hoverPt, Z = 5, R = 68 * k, cw = ov.clientWidth, ch = ov.clientHeight;
+  var q = map.xy(p[0], p[1]);
+  var bx = (q[0] < cw / 2) ? cw - R * 2 - 14 * k : 14 * k, by = 14 * k;
+  g.save();
+  g.beginPath(); g.rect(bx, by, R * 2, R * 2); g.clip();
+  g.fillStyle = '#0c1a24'; g.fillRect(bx, by, R * 2, R * 2);
+  try {
+    var sw = (R * 2) / (Z * map.s);
+    g.drawImage(vid, p[0] - sw / 2, p[1] - sw / 2, sw, sw, bx, by, R * 2, R * 2);
+  } catch (e) {}
+  // 放大鏡裡也畫出已標好的角與球場線
+  g.translate(bx + R, by + R); g.scale(Z, Z); g.translate(-q[0], -q[1]);
+  g.lineWidth = 1 / Z * 1.4 * k;
+  if (S.cal) { g.strokeStyle = 'rgba(255,255,255,.95)'; drawCourtLinesOnly(g, S.cal, map); }
+  g.strokeStyle = BALL;
+  S.corners.forEach(function (c) {
+    var cc = map.xy(c[0], c[1]);
+    g.beginPath(); g.arc(cc[0], cc[1], 5 * k / Z, 0, 6.2832); g.stroke();
+  });
+  g.restore();
+  g.strokeStyle = BALL; g.lineWidth = 2 * k;
+  g.strokeRect(bx, by, R * 2, R * 2);
+  g.beginPath();
+  g.moveTo(bx + R - 10 * k, by + R); g.lineTo(bx + R + 10 * k, by + R);
+  g.moveTo(bx + R, by + R - 10 * k); g.lineTo(bx + R, by + R + 10 * k);
+  g.strokeStyle = 'rgba(255,80,80,.95)'; g.lineWidth = 1.4 * k; g.stroke();
+}
+function drawCourtLinesOnly(g, cal, map) {
+  var L = GEO.courtLines(cal.type);
+  L.lines.forEach(function (sg) {
+    var A = GEO.project(cal, sg[0]), B = GEO.project(cal, sg[1]);
+    if (!A || !B) return;
+    var a = map.xy(A[0], A[1]), b = map.xy(B[0], B[1]);
+    g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.stroke();
+  });
+}
 function drawCalMode(g, map) {
   var k = map.k, i, c;
   if (S.corners.length >= 2) {
@@ -1391,6 +1438,7 @@ function drawCalMode(g, map) {
     g.font = fontOf(k * 1.1, true); g.fillStyle = '#fff'; g.fillText(String(i + 1), c[0], c[1] + 0.5);
     label(g, CORNER_NAMES[i], c[0], c[1] - 20 * k, k, '#fff', true);
   }
+  if (S.hoverPt) drawLoupe(g, map, k);
   if (S.corners.length < 4) {
     var msg = '點選第 ' + (S.corners.length + 1) + ' 個角：' + CORNER_NAMES[S.corners.length];
     g.font = fontOf(k * 1.3, true); g.textAlign = 'center'; g.textBaseline = 'middle';
@@ -1447,23 +1495,38 @@ function trackOpt() {
 }
 /* 用已經存下來的候選點重新算軌跡：改靈敏度不必重新解碼影片 */
 function rebuildTracks() {
-  if (!S.frames.length) { S.tracks = []; S.trLevel = null; recomputeShots(); return; }
+  if (!S.frames.length) { S.allTracks = []; S.tracks = []; S.trLevel = null; recomputeShots(); return; }
   var sc = S.trScale, r = TRK.pathsFrom(S.frames, trackOpt());
   S.trLevel = r;
-  S.tracks = r.paths.map(function (tr, idx) {
+  S.allTracks = r.paths.map(function (tr, idx) {
     return { id: idx + 1, pts: tr.pts.map(function (p) { return { t: p.t, u: p.x * sc, v: p.y * sc }; }) };
   });
+  applyTrackFilter();
+}
+/* 用重力拋物線過濾：球員的身體、腳步、球拍不會符合，會被剔除 */
+function applyTrackFilter() {
+  var all = S.allTracks || [], dropped = 0;
+  if (S.cal && $('tgPhys').checked && all.length) {
+    /* 把每條軌跡切成「真的符合重力拋物線」的飛行段，其餘（球員、腳步、球拍）直接丟掉 */
+    S.tracks = GEO.physicalFlights(S.cal, all, { imgW: vid.videoWidth, imgH: vid.videoHeight });
+    dropped = all.length - new Set(S.tracks.map(function (t) { return t.src; })).size;
+  } else S.tracks = all.slice();
   recomputeShots();
+  if (!S.frames.length) { S.ovDirty = true; return; }
   var avg = S.frames.reduce(function (a, f) { return a + f.c.length; }, 0) / S.frames.length;
-  var okN = S.segments.filter(function (x) { return x.ok; }).length;
+  var okN = S.segments.filter(function (x) { return x.ok; }).length, r = S.trLevel;
   $('trInfo').textContent = S.tracks.length
-    ? ('找到 ' + S.tracks.length + ' 條球軌跡' + (S.cal ? '，其中 ' + okN + ' 段可估算球速。' : '。完成球場標定後就能換算球速。'))
-    : '沒有找到球的軌跡。把「球偵測靈敏度」調高，或勾選「顯示偵測點」看看工具有沒有看到球。';
+    ? ((S.cal && $('tgPhys').checked)
+        ? ('從 ' + all.length + ' 條原始軌跡切出 ' + S.tracks.length + ' 段符合拋物線的飛行，其中 ' + okN + ' 段可估算球速。')
+        : ('顯示 ' + S.tracks.length + ' 條原始軌跡' + (S.cal ? '，其中 ' + okN + ' 段可估算球速。' : '。完成球場標定後才能換算球速。')))
+    : (all.length ? ('找到 ' + all.length + ' 條軌跡，但沒有一段符合重力拋物線。可能是球場標定不準，或追到的其實是球員。可以取消勾選上面的拋物線過濾看看原始軌跡。')
+                  : '沒有找到球的軌跡。把「球偵測靈敏度」調高，或勾選「顯示偵測點」看看工具有沒有看到球。');
   $('trDiag').textContent = '已解析 ' + S.frames.length + ' 格，每格平均 ' + avg.toFixed(1) + ' 個候選點'
-    + (r.levelName ? '，用「' + r.levelName + '」條件連成軌跡。' : '，但沒有連成穩定軌跡。')
-    + ' 調整靈敏度會立刻重算，不需要重新解析。';
+    + (r && r.levelName ? '，用「' + r.levelName + '」條件連成軌跡。' : '，但沒有連成穩定軌跡。')
+    + ' 調整靈敏度或拋物線過濾會立刻重算，不需要重新解析。';
   S.ovDirty = true;
 }
+$('tgPhys').addEventListener('change', function () { if (!S.busy) applyTrackFilter(); });
 $('trSens').addEventListener('change', function () { if (S.frames.length && !S.busy) rebuildTracks(); });
 
 async function trackBalls() {
@@ -1549,12 +1612,14 @@ $('trStart').addEventListener('click', trackBalls);
 $('trCancel').addEventListener('click', function () { S.cancel = true; });
 
 vid.addEventListener('loadedmetadata', function () {
-  S.tracks = []; S.segments = []; S.segByTrack = {};
+  S.tracks = []; S.allTracks = []; S.segments = []; S.segByTrack = {};
   $('calStart').disabled = false; $('trStart').disabled = false;
   $('trInfo').textContent = ''; $('trDiag').textContent = ''; $('trProg').hidden = true;
   S.frames = []; S.trLevel = null;
   loadCal();
 });
+
+window.TCState = S;   /* 方便排查問題時在主控台檢查狀態 */
 
 /* 啟動 */
 syncLabels();

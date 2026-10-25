@@ -96,3 +96,32 @@ for (const name of Object.keys(cams)) {
     if (cn === 0 && maxLine > 0.5) { console.error('無雜訊時球場線就對不上'); process.exit(1); }
   }
 }
+
+/* 4) 物理過濾：真實飛行應保留，球員腳步／身體晃動應剔除 */
+console.log('\n=== 物理過濾（拋物線檢查）===');
+(function () {
+  const cam = cams['behind-baseline 2.2m'];
+  const dst = [[0,0],[Wc,0],[Wc,Lc],[0,Lc]].map(p => proj(cam, [p[0], p[1], 0]));
+  const cal = G.calibrate(dst, 'doubles', W, H);
+  const mk = (id, pts) => ({ id, pts });
+  const tracks = [];
+  // 真球：底線抽球
+  const shot = flight([2.5, 1.0, 0.9], [8.0, 20.0, 0], 100 / 3.6, 30, false);
+  tracks.push(mk(1, shot.pts.map(p => { const q = proj(cam, p.P); return { t: p.t, u: q[0] + gauss()*0.8, v: q[1] + gauss()*0.8 }; })));
+  // 腳步：貼地、來回、慢
+  tracks.push(mk(2, Array.from({length: 30}, (_, i) => {
+    const t = i / 30, P = [5.4 + 0.9 * Math.sin(t * 7), -0.4 + 0.25 * Math.sin(t * 11), 0.03 + 0.04 * Math.abs(Math.sin(t * 13))];
+    const q = proj(cam, P); return { t, u: q[0] + gauss()*1.2, v: q[1] + gauss()*1.2 };
+  })));
+  // 身體／手臂：約在 1.2 公尺高抖動
+  tracks.push(mk(3, Array.from({length: 30}, (_, i) => {
+    const t = i / 30, P = [4.0 + 0.5 * Math.sin(t * 9), 1.2 + 0.4 * Math.cos(t * 8), 1.2 + 0.3 * Math.sin(t * 15)];
+    const q = proj(cam, P); return { t, u: q[0] + gauss()*1.5, v: q[1] + gauss()*1.5 };
+  })));
+  const fl = G.physicalFlights(cal, tracks, { imgW: W, imgH: H });
+  const srcs = [...new Set(fl.map(f => f.src))];
+  console.log('保留的飛行段來自軌跡：', srcs.join(',') || '(無)', '（預期只有 1）', '| 段數', fl.length,
+    '| 速度', fl.map(f => (f.fit.speed0*3.6).toFixed(0) + 'km/h').join(','));
+  if (!srcs.includes(1)) { console.error('真球被誤刪'); process.exit(1); }
+  if (srcs.includes(2) || srcs.includes(3)) { console.error('球員軌跡沒被剔除'); process.exit(1); }
+})();
