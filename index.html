@@ -392,9 +392,9 @@ ul.shots {
       <div class="ctl">
         <label for="trSens" style="font-weight:500;font-size:14px">球偵測靈敏度</label>
         <select class="sel" id="trSens">
-          <option value="30">高（球很小或畫面偏暗時用）</option>
-          <option value="42" selected>中（建議）</option>
-          <option value="60">低（只抓很明顯的球）</option>
+          <option value="22">高（球很小或畫面偏暗時用）</option>
+          <option value="30" selected>中（建議）</option>
+          <option value="45">低（只抓很明顯的球）</option>
         </select>
       </div>
       <div class="ctl">
@@ -1491,7 +1491,7 @@ function setTrackUi(on) {
 }
 function trackOpt() {
   var sens = +$('trSens').value;
-  return { scoreMin: sens, isoMax: sens <= 30 ? 100 : (sens <= 42 ? 60 : 35), smoothTol: Math.max(2.6, 0.0035 * (S.trW || 960)) };
+  return { scoreMin: sens, isoMax: sens <= 22 ? 30 : (sens <= 30 ? 18 : 12), smoothTol: Math.max(4, 0.005 * (S.trW || 1280)) };
 }
 /* 用已經存下來的候選點重新算軌跡：改靈敏度不必重新解碼影片 */
 function rebuildTracks() {
@@ -1506,16 +1506,22 @@ function rebuildTracks() {
 /* 用重力拋物線過濾：球員的身體、腳步、球拍不會符合，會被剔除 */
 function applyTrackFilter() {
   var all = S.allTracks || [], dropped = 0;
+  var fellBack = false;
   if (S.cal && $('tgPhys').checked && all.length) {
-    /* 把每條軌跡切成「真的符合重力拋物線」的飛行段，其餘（球員、腳步、球拍）直接丟掉 */
-    S.tracks = GEO.physicalFlights(S.cal, all, { imgW: vid.videoWidth, imgH: vid.videoHeight });
-    dropped = all.length - new Set(S.tracks.map(function (t) { return t.src; })).size;
+    /* 把每條軌跡切成「符合重力拋物線」的飛行段。真實轉播畫面的上旋球不完全服從純重力，
+       所以如果這樣會把東西全砍光，就退回顯示原始軌跡，並在下面說明。 */
+    var fl = GEO.physicalFlights(S.cal, all, { imgW: vid.videoWidth, imgH: vid.videoHeight });
+    if (fl.length) { S.tracks = fl; dropped = all.length - new Set(fl.map(function (t) { return t.src; })).size; }
+    else { S.tracks = all.slice(); fellBack = true; }
   } else S.tracks = all.slice();
   recomputeShots();
   if (!S.frames.length) { S.ovDirty = true; return; }
   var avg = S.frames.reduce(function (a, f) { return a + f.c.length; }, 0) / S.frames.length;
   var okN = S.segments.filter(function (x) { return x.ok; }).length, r = S.trLevel;
-  $('trInfo').textContent = S.tracks.length
+  $('trInfo').textContent = fellBack
+    ? ('顯示 ' + S.tracks.length + ' 條球軌跡。沒有一段通過重力拋物線檢查（真實比賽的上旋球不完全服從純重力，'
+       + '單機位也不容易解出深度），所以改為直接顯示追蹤結果；這種情況下不會給球速。')
+    : S.tracks.length
     ? ((S.cal && $('tgPhys').checked)
         ? ('從 ' + all.length + ' 條原始軌跡切出 ' + S.tracks.length + ' 段符合拋物線的飛行，其中 ' + okN + ' 段可估算球速。')
         : ('顯示 ' + S.tracks.length + ' 條原始軌跡' + (S.cal ? '，其中 ' + okN + ' 段可估算球速。' : '。完成球場標定後才能換算球速。')))
