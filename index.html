@@ -1205,8 +1205,11 @@ function updateCalInfo() {
   if (!S.cal) { el.className = 'cal-info'; el.textContent = '尚未標定。把影片暫停在球場四個角都看得到的畫面，再按「開始標定」。'; return; }
   var c = S.cal;
   el.className = 'cal-info' + (c.warn ? ' warn-text' : '');
-  el.textContent = '已標定' + (c.type === 'singles' ? '單打' : '雙打') + '外框。推算相機高度約 ' + c.C[2].toFixed(1) + ' 公尺，焦距約 ' + Math.round(c.f) + ' 像素' +
-    (c.fAssumed ? '（無法由四個角推算，使用預設值）' : '') + '。' + (c.warn ? ' ' + c.warn : '');
+  var q = { good: '兩種估計一致', single: '單一估計', poor: '兩種估計不一致', none: '無法推算', height: '由相機高度反解' }[c.conf] || '';
+  el.textContent = '已標定' + (c.type === 'singles' ? '單打' : '雙打') + '外框，角點誤差 ' + c.reproj.toFixed(1) + ' 像素。'
+    + '推算相機高度約 ' + c.C[2].toFixed(1) + ' 公尺，焦距約 ' + Math.round(c.f) + ' 像素（' + q + '）。'
+    + '請看預覽：發球區與中線有沒有落在真實的線上？沒有的話就是角點或「標定範圍」選錯了。'
+    + (c.warn ? ' ' + c.warn : '');
 }
 $('courtType').addEventListener('change', function () { S.courtType = $('courtType').value; recalc(true); });
 $('calStart').addEventListener('click', function () {

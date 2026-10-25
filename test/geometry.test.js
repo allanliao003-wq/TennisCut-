@@ -72,3 +72,27 @@ for (const name of Object.keys(cams)) {
     }
   }
 }
+
+/* 3) 球場格線疊圖：標定後畫出來的線，是不是真的落在球場線上？
+      這是使用者在預覽畫面上看到的東西，誤差以像素計。 */
+console.log('\n=== 球場格線疊圖誤差（像素）===');
+for (const name of Object.keys(cams)) {
+  const cam = cams[name];
+  for (const cn of [0, 1.5, 4]) {
+    const dst = [[0,0],[Wc,0],[Wc,Lc],[0,Lc]].map(p => { const q = proj(cam, [p[0], p[1], 0]); return [q[0] + gauss()*cn, q[1] + gauss()*cn]; });
+    const cal = G.calibrate(dst, 'doubles', W, H);
+    const L = G.courtLines('doubles');
+    let maxCorner = 0, maxLine = 0, maxNet = 0;
+    [[0,0,0],[Wc,0,0],[Wc,Lc,0],[0,Lc,0]].forEach((p, i) => {
+      const q = G.project(cal, p); maxCorner = Math.max(maxCorner, Math.hypot(q[0]-dst[i][0], q[1]-dst[i][1]));
+    });
+    L.lines.forEach(seg => seg.forEach(p => {
+      const a = G.project(cal, p), b = proj(cam, p);
+      maxLine = Math.max(maxLine, Math.hypot(a[0]-b[0], a[1]-b[1]));
+    }));
+    L.net.forEach(p => { const a = G.project(cal, p), b = proj(cam, p); maxNet = Math.max(maxNet, Math.hypot(a[0]-b[0], a[1]-b[1])); });
+    console.log(name.padEnd(22), '角點雜訊', String(cn).padStart(3), 'px | 四角誤差', maxCorner.toFixed(2),
+      '| 所有球場線最大誤差', maxLine.toFixed(2), '| 網子頂端(離地1.07m)', maxNet.toFixed(2), '| 焦距來源', cal.fFrom);
+    if (cn === 0 && maxLine > 0.5) { console.error('無雜訊時球場線就對不上'); process.exit(1); }
+  }
+}
